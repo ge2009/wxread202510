@@ -1,6 +1,7 @@
 # config.py 自定义配置,包括阅读次数、推送token的填写
 import os
 import re
+import shlex
 
 """
 可修改区域
@@ -85,29 +86,60 @@ def convert(curl_command):
     """提取bash接口中的headers与cookies
     支持 -H 'Cookie: xxx' 和 -b 'xxx' 两种方式的cookie提取
     """
-    # 提取 headers
     headers_temp = {}
-    for match in re.findall(r"-H '([^:]+): ([^']+)'", curl_command):
-        headers_temp[match[0]] = match[1]
+    cookie_string = ''
 
-    # 提取 cookies
+    normalized_command = curl_command.replace("\\\r\n", " ").replace("\\\n", " ")
+    try:
+        parts = shlex.split(normalized_command)
+    except ValueError:
+        parts = []
+
+    index = 0
+    while index < len(parts):
+        option = parts[index]
+        value = None
+
+        if option in ('-H', '--header') and index + 1 < len(parts):
+            index += 1
+            value = parts[index]
+        elif option.startswith('--header='):
+            value = option.split('=', 1)[1]
+
+        if value and ':' in value:
+            key, header_value = value.split(':', 1)
+            headers_temp[key.strip()] = header_value.strip()
+
+        if option in ('-b', '--cookie') and index + 1 < len(parts):
+            index += 1
+            cookie_string = parts[index]
+        elif option.startswith('--cookie='):
+            cookie_string = option.split('=', 1)[1]
+
+        index += 1
+
+    if not headers_temp:
+        for quote, key, value in re.findall(r"-H\s+(['\"])(.*?):\s*(.*?)\1", curl_command, re.S):
+            headers_temp[key.strip()] = value.strip()
+
     cookies = {}
-    
+
     # 从 -H 'Cookie: xxx' 提取
     cookie_header = next((v for k, v in headers_temp.items() 
                          if k.lower() == 'cookie'), '')
-    
+
     # 从 -b 'xxx' 提取
-    cookie_b = re.search(r"-b '([^']+)'", curl_command)
-    cookie_string = cookie_b.group(1) if cookie_b else cookie_header
-    
+    if not cookie_string:
+        cookie_b = re.search(r"-b\s+(['\"])(.*?)\1", curl_command, re.S)
+        cookie_string = cookie_b.group(2) if cookie_b else cookie_header
+
     # 解析 cookie 字符串
     if cookie_string:
-        for cookie in cookie_string.split('; '):
+        for cookie in cookie_string.split(';'):
             if '=' in cookie:
                 key, value = cookie.split('=', 1)
                 cookies[key.strip()] = value.strip()
-    
+
     # 移除 headers 中的 Cookie/cookie
     headers = {k: v for k, v in headers_temp.items() 
               if k.lower() != 'cookie'}
@@ -115,4 +147,10 @@ def convert(curl_command):
     return headers, cookies
 
 
+if os.getenv('GITHUB_ACTIONS') == 'true' and not curl_str:
+    raise ValueError("❌ GitHub Actions中必须配置WXREAD_CURL_BASH secret。")
+
 headers, cookies = convert(curl_str) if curl_str else (headers, cookies)
+
+if curl_str and not cookies:
+    raise ValueError("❌ WXREAD_CURL_BASH未解析到cookie，请确认复制的是read接口的curl bash完整内容。")

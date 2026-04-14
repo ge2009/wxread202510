@@ -16,7 +16,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - 
 
 # 加密盐及其它默认值
 KEY = "3c5c8717f3daf09iop3423zafeqoi"
-COOKIE_DATA = {"rq": "%2Fweb%2Fbook%2Fread"}
+COOKIE_DATA = {"rq": "%2Fweb%2Fbook%2Fread", "ql": False}
+COOKIE_DATA_FALLBACKS = [
+    COOKIE_DATA,
+    {"rq": "%2Fweb%2Fbook%2Fread"},
+    {"rq": "%2Fweb%2Fbook%2Fread", "ql": True},
+]
 READ_URL = "https://weread.qq.com/web/book/read"
 RENEW_URL = "https://weread.qq.com/web/login/renewal"
 FIX_SYNCKEY_URL = "https://weread.qq.com/web/book/chapterInfos"
@@ -43,11 +48,38 @@ def cal_hash(input_string):
 
 def get_wr_skey():
     """刷新cookie密钥"""
-    response = requests.post(RENEW_URL, headers=headers, cookies=cookies,
-                             data=json.dumps(COOKIE_DATA, separators=(',', ':')))
-    for cookie in response.headers.get('Set-Cookie', '').split(';'):
-        if "wr_skey" in cookie:
-            return cookie.split('=')[-1][:8]
+    for cookie_data in COOKIE_DATA_FALLBACKS:
+        try:
+            response = requests.post(
+                RENEW_URL,
+                headers=headers,
+                cookies=cookies,
+                data=json.dumps(cookie_data, separators=(',', ':')),
+                timeout=20,
+            )
+        except requests.exceptions.RequestException as error:
+            logger.warning("❌ renewal请求异常，payload=%s，error=%s", cookie_data, error)
+            continue
+
+        wr_skey = response.cookies.get("wr_skey")
+        if wr_skey:
+            return wr_skey[:8]
+
+        set_cookie = response.headers.get('Set-Cookie', '')
+        match = re.search(r'(?:^|,\s*|;\s*)wr_skey=([^;,]+)', set_cookie)
+        if match:
+            return match.group(1)[:8]
+
+        try:
+            response_body = response.json()
+        except ValueError:
+            response_body = response.text[:200]
+        logger.warning(
+            "❌ renewal未返回wr_skey，status=%s，payload=%s，response=%s",
+            response.status_code,
+            cookie_data,
+            response_body,
+        )
     return None
 
 def fix_no_synckey():
@@ -64,7 +96,8 @@ def refresh_cookie():
     else:
         ERROR_CODE = "❌ 无法获取新密钥或者WXREAD_CURL_BASH配置有误，终止运行。"
         logging.error(ERROR_CODE)
-        push(ERROR_CODE, PUSH_METHOD)
+        if PUSH_METHOD not in (None, ''):
+            push(ERROR_CODE, PUSH_METHOD)
         raise Exception(ERROR_CODE)
 
 refresh_cookie()
