@@ -1,0 +1,77 @@
+name: wxread failure notification
+
+on:
+  workflow_run:
+    workflows: [wxread]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify-failure:
+    name: Notify final failure in WeCom
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: AutoRead
+    timeout-minutes: 2
+    steps:
+      - name: Send final failure notification
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          python3 - <<'PY'
+          import html
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timedelta, timezone
+
+          with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as source:
+              event = json.load(source)
+          run = event.get('workflow_run', {})
+          if (event.get('action') != 'completed'
+                  or run.get('status') != 'completed'
+                  or run.get('conclusion') != 'failure'):
+              print('No final failure; notification skipped')
+              raise SystemExit(0)
+
+          webhook = os.environ.get('WECOM_WEBHOOK_URL', '')
+          if not webhook:
+              raise SystemExit('::error::Missing WECOM_WEBHOOK_URL secret')
+
+          finished = datetime.fromisoformat(run['updated_at'].replace('Z', '+00:00'))
+          finished = finished.astimezone(timezone(timedelta(hours=8)))
+          repository = html.escape(os.environ['GITHUB_REPOSITORY'])
+          branch = html.escape(run.get('head_branch') or '-')
+          content = (
+              '## 微信读书自动任务告警\n'
+              '**<font color="warning">【最终失败】请及时处理</font>**\n\n'
+              '本次运行已结束，未能正常完成。\n\n'
+              f'> 仓库：{repository}\n'
+              f'> 分支：{branch}\n'
+              f"> 运行：#{run['run_number']}（第 {run.get('run_attempt', 1)} 次执行）\n"
+              f'> 结束时间：{finished:%Y-%m-%d %H:%M:%S}（北京时间）\n\n'
+              '**处理建议**\n'
+              '先查看失败日志；若提示 Cookie 过期或鉴权失败，'
+              '请重新登录微信读书，更新 `WXREAD_CURL_BASH` 后重新运行。\n\n'
+              f"[查看本次失败日志]({run['html_url']})"
+          )
+          payload = json.dumps(
+              {'msgtype': 'markdown', 'markdown': {'content': content}},
+              ensure_ascii=False,
+          ).encode('utf-8')
+          request = urllib.request.Request(
+              webhook, data=payload,
+              headers={'Content-Type': 'application/json; charset=utf-8'},
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  result = json.load(response)
+          except Exception:
+              # Network exceptions may include the secret webhook URL.
+              raise SystemExit('::error::WeCom request failed or returned invalid JSON')
+          if not isinstance(result, dict) or result.get('errcode') != 0:
+              raise SystemExit('::error::WeCom rejected the notification')
+          print('WeCom final failure notification accepted (errcode=0)')
+          PY
