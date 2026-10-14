@@ -55,6 +55,62 @@ jobs:
       run: |
         python main.py
 
+  notify-failure:
+    name: Notify failure in WeCom
+    needs: deploy
+    if: ${{ failure() && needs.deploy.result == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: AutoRead
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: Send failure notification
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          webhook = os.environ.get('WECOM_WEBHOOK_URL', '')
+          if not webhook:
+              raise SystemExit('::error::Missing WECOM_WEBHOOK_URL secret')
+
+          run_url = (
+              f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          )
+          content = (
+              '微信读书自动任务失败\n'
+              f"仓库：{os.environ['GITHUB_REPOSITORY']}\n"
+              f"分支：{os.environ['GITHUB_REF_NAME']}\n"
+              f"运行：#{os.environ['GITHUB_RUN_NUMBER']}"
+              f"（第 {os.environ['GITHUB_RUN_ATTEMPT']} 次执行）\n"
+              '请查看日志确认原因；若提示 Cookie 过期或鉴权失败，'
+              '请重新登录微信读书并更新 WXREAD_CURL_BASH。\n'
+              f'日志：{run_url}'
+          )
+          payload = json.dumps(
+              {'msgtype': 'text', 'text': {'content': content}},
+              ensure_ascii=False,
+          ).encode('utf-8')
+          request = urllib.request.Request(
+              webhook, data=payload,
+              headers={'Content-Type': 'application/json; charset=utf-8'},
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  result = json.load(response)
+          except Exception:
+              # Network exceptions may include the secret webhook URL.
+              raise SystemExit('::error::WeCom request failed or returned invalid JSON')
+          if not isinstance(result, dict) or result.get('errcode') != 0:
+              raise SystemExit('::error::WeCom rejected the notification')
+          print('WeCom failure notification accepted (errcode=0)')
+          PY
+
   keepalive-job:
     name: Keepalive Workflow
     if: ${{ always() }}

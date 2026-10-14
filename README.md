@@ -52,6 +52,12 @@
 
 **重要：除了READ_NUM配置在varables，其它的都配置在secrets里面的；需要推送`PUSH_METHOD`是必填的。**
 
+### 企业微信失败提醒
+
+在 Repository secrets 中添加 `WECOM_WEBHOOK_URL`，值为企业微信群机器人的完整 Webhook 地址。不要将地址写入代码或提交到仓库。
+
+主任务 `deploy` 失败时，独立通知任务会向群里发送一条文本消息，包含仓库、分支、运行编号和日志链接，并提示鉴权失败时更新 `WXREAD_CURL_BASH`。正常完成或主动取消时不发送；每次失败运行（包括重新运行）都会提醒。此通知独立于原有的 `PUSH_METHOD`，两者可同时使用。企业微信接口拒绝消息或请求失败时，通知任务会明确报错。
+
 ### 视频教程
 
 [![视频教程](https://github.com/user-attachments/assets/ec144869-3dbb-40fe-9bc5-f8bf1b5fce3c)](https://www.bilibili.com/video/BV1kJ6gY3En3/ "点击查看视频")
